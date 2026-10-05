@@ -212,14 +212,71 @@ async def link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     display_name = record.get("first_name") or "Member"
     tg_user_text = f"@{record['tg_username']}" if record.get("tg_username") else f"ID: {target_user_id}"
 
+    # Attempt to assign the Group Custom Title badge (shows next to their name on messages)
+    badge_note = ""
+    if message.chat and message.chat.type in (ChatType.SUPERGROUP, ChatType.GROUP):
+        success_badge, badge_val = await try_set_custom_title(
+            context, message.chat.id, target_user_id, clean_x
+        )
+        if success_badge:
+            badge_note = f"\n🏷️ <b>Name Badge:</b> Set to <code>{html.escape(badge_val)}</code> (now appears next to their name on group messages!)"
+        else:
+            badge_note = (
+                "\nℹ️ <b>Name Badge:</b> Could not set title badge automatically.\n"
+                "<i>(Tip: Ensure this group is a Supergroup and grant the bot the 'Add new admins' permission).</i>"
+            )
+
     response_text = (
         "✅ <b>Member Successfully Linked!</b>\n\n"
         f"• <b>X (Twitter) Tag:</b> <code>@{html.escape(clean_x)}</code>\n"
         f"• <b>Telegram Account:</b> <a href=\"tg://user?id={target_user_id}\">{html.escape(display_name)}</a> ({html.escape(tg_user_text)})\n"
-        f"• <b>Telegram ID:</b> <code>{target_user_id}</code>\n\n"
-        f"<i>You can now mention them anytime using:</i> <code>/tag {html.escape(clean_x)}</code>"
+        f"• <b>Telegram ID:</b> <code>{target_user_id}</code>{badge_note}\n\n"
+        f"<i>You can now mention/find them anytime using:</i> <code>/tag {html.escape(clean_x)}</code>"
     )
     await message.reply_text(response_text, parse_mode=ParseMode.HTML)
+
+
+async def try_set_custom_title(
+    context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, tag: str
+) -> Tuple[bool, str]:
+    """
+    Attempts to assign a custom administrator title badge (appears next to their name in the group).
+    Telegram allows up to 16 characters for custom titles.
+    """
+    badge = f"@{tag}"[:16]
+    try:
+        member = await context.bot.get_chat_member(chat_id, user_id)
+        # If user is not yet an admin, promote them with minimal rights to hold the title
+        if member.status not in ("creator", "administrator"):
+            await context.bot.promote_chat_member(
+                chat_id=chat_id,
+                user_id=user_id,
+                can_manage_chat=True
+            )
+
+        await context.bot.set_chat_administrator_custom_title(
+            chat_id=chat_id,
+            user_id=user_id,
+            custom_title=badge
+        )
+        return True, badge
+    except Exception as e:
+        logger.warning("Could not set custom title badge for user %s: %s", user_id, e)
+        return False, str(e)
+
+
+async def try_remove_custom_title(
+    context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int
+):
+    """Attempts to remove custom administrator title badge."""
+    try:
+        await context.bot.set_chat_administrator_custom_title(
+            chat_id=chat_id,
+            user_id=user_id,
+            custom_title=""
+        )
+    except Exception as e:
+        logger.warning("Could not remove custom title for user %s: %s", user_id, e)
 
 
 async def unlink_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -230,10 +287,19 @@ async def unlink_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     args = context.args or []
 
+    target_user_id: Optional[int] = None
     if not args and message.reply_to_message and message.reply_to_message.from_user:
-        identifier = str(message.reply_to_message.from_user.id)
+        target_user_id = message.reply_to_message.from_user.id
+        identifier = str(target_user_id)
     elif args:
         identifier = args[0]
+        if identifier.isdigit():
+            target_user_id = int(identifier)
+        else:
+            clean = database.normalize_handle(identifier)
+            m = database.get_member_by_x_handle(clean) or database.get_member_by_tg_username(clean)
+            if m:
+                target_user_id = m.get("user_id")
     else:
         await message.reply_text(
             "⚠️ <b>Usage:</b> <code>/unlink &lt;x_handle | @tg_username | user_id&gt;</code>\n"
@@ -242,12 +308,17 @@ async def unlink_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # Clear custom title if in a group
+    if target_user_id and message.chat and message.chat.type in (ChatType.SUPERGROUP, ChatType.GROUP):
+        await try_remove_custom_title(context, message.chat.id, target_user_id)
+
     success = database.remove_member(identifier)
     clean_id = database.normalize_handle(identifier)
     if success:
         await message.reply_text(
-            f"✅ Link for <code>{html.escape(clean_id)}</code> has been removed.",
+            f"✅ Link and badge for <code>{html.escape(clean_id)}</code> have been removed.",
             parse_mode=ParseMode.HTML
+
         )
     else:
         await message.reply_text(
