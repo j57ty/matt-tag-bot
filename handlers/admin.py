@@ -150,9 +150,17 @@ async def link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_username = replied_user.username
         target_first_name = replied_user.first_name
         target_last_name = replied_user.last_name
-        x_handle = args[0]
 
-    # Case 2: Provided 2 arguments: /link <@tg_user | user_id> <x_handle>
+        # If admin replied and typed "/link @username <tag>", use the second argument as the tag
+        if len(args) >= 2 and args[0].lstrip("@").lower() == (replied_user.username or "").lower():
+            x_handle = args[1]
+        else:
+            x_handle = args[-1] if len(args) == 1 else args[0]
+
+        # Auto-cache this user immediately
+        database.cache_user(target_user_id, target_username, target_first_name, target_last_name)
+
+    # Case 2: Provided 2 arguments without replying: /link <@tg_user | user_id> <x_handle>
     elif len(args) >= 2:
         user_param = args[0]
         x_handle = args[1]
@@ -167,6 +175,26 @@ async def link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             clean_param = database.normalize_handle(user_param)
             cached = database.find_cached_user_by_username(clean_param)
+
+            # If not in local cache, check if they are in the group's administrators list
+            if not cached and message.chat:
+                try:
+                    chat_admins = await context.bot.get_chat_administrators(message.chat.id)
+                    for adm in chat_admins:
+                        if adm.user and (adm.user.username or "").lower() == clean_param:
+                            database.cache_user(
+                                adm.user.id, adm.user.username, adm.user.first_name, adm.user.last_name
+                            )
+                            cached = {
+                                "user_id": adm.user.id,
+                                "tg_username": adm.user.username,
+                                "first_name": adm.user.first_name,
+                                "last_name": adm.user.last_name
+                            }
+                            break
+                except Exception as e:
+                    logger.debug("Could not inspect chat administrators: %s", e)
+
             if cached:
                 target_user_id = cached["user_id"]
                 target_username = cached.get("tg_username")
@@ -174,11 +202,12 @@ async def link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 target_last_name = cached.get("last_name")
             else:
                 await message.reply_text(
-                    f"⚠️ <b>User @{html.escape(clean_param)} has not been cached yet.</b>\n\n"
-                    "Telegram doesn't allow bots to look up arbitrary usernames that haven't sent a message.\n"
-                    "<b>To link them:</b>\n"
-                    "1. Reply directly to any message they sent in this group with <code>/link &lt;x_handle&gt;</code>\n"
-                    "2. Or ask them to say something in the chat first, then retry this command.",
+                    f"⚠️ <b>User @{html.escape(clean_param)} has not been seen by the bot yet.</b>\n\n"
+                    "Telegram doesn't allow bots to search for arbitrary usernames that haven't sent a message.\n\n"
+                    "<b>Two quick ways to link them:</b>\n"
+                    "1. <b>Reply directly</b> to any message that user sent in this group with:\n"
+                    f"   <code>/link {html.escape(x_handle)}</code>\n"
+                    "2. Or ask them to send a message in this group first, then retry this command.",
                     parse_mode=ParseMode.HTML
                 )
                 return
