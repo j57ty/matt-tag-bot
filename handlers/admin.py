@@ -257,7 +257,7 @@ async def link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     response_text = (
         "✅ <b>Member Successfully Linked!</b>\n\n"
-        f"• <b>X (Twitter) Tag:</b> <code>@{html.escape(clean_x)}</code>\n"
+        f"• <b>Tag:</b> <code>{html.escape(clean_x)}</code>\n"
         f"• <b>Telegram Account:</b> <a href=\"tg://user?id={target_user_id}\">{html.escape(display_name)}</a> ({html.escape(tg_user_text)})\n"
         f"• <b>Telegram ID:</b> <code>{target_user_id}</code>{badge_note}\n\n"
         f"<i>You can now mention/find them anytime using:</i> <code>/tag {html.escape(clean_x)}</code>"
@@ -272,7 +272,7 @@ async def try_set_custom_title(
     Attempts to assign a custom administrator title badge (appears next to their name in the group).
     Telegram allows up to 16 characters for custom titles.
     """
-    badge = f"@{tag}"[:16]
+    badge = tag[:16]
     try:
         member = await context.bot.get_chat_member(chat_id, user_id)
         # If user is not yet an admin, promote them with minimal rights to hold the title
@@ -388,7 +388,7 @@ async def execute_tag(update: Update, x_handle: str, custom_message: str = ""):
 
     if not member:
         await update.message.reply_text(
-            f"❌ <b>No member found</b> registered with X tag <code>@{html.escape(clean_x)}</code>.\n"
+            f"❌ <b>No member found</b> registered with tag <code>{html.escape(clean_x)}</code>.\n"
             f"Link them first using <code>/link &lt;user&gt; {html.escape(clean_x)}</code>.",
             parse_mode=ParseMode.HTML
         )
@@ -403,7 +403,7 @@ async def execute_tag(update: Update, x_handle: str, custom_message: str = ""):
     username_display = f"(@{html.escape(tg_username)})" if tg_username else ""
 
     lines = [
-        f"🎯 <b>X Tag:</b> <code>@{html.escape(clean_x)}</code>",
+        f"🎯 <b>Tag:</b> <code>{html.escape(clean_x)}</code>",
         f"👤 <b>Member:</b> {mention_link} {username_display}"
     ]
 
@@ -473,7 +473,7 @@ async def lookup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     info_text = (
         "📋 <b>Member Record:</b>\n\n"
-        f"• <b>X (Twitter) Tag:</b> <code>@{html.escape(member['x_handle'])}</code>\n"
+        f"• <b>Tag:</b> <code>{html.escape(member['x_handle'])}</code>\n"
         f"• <b>Telegram Name:</b> <a href=\"tg://user?id={member['user_id']}\">{html.escape(display_name)}</a>\n"
         f"• <b>Telegram Username:</b> {html.escape(tg_username)}\n"
         f"• <b>Telegram User ID:</b> <code>{member['user_id']}</code>\n"
@@ -500,7 +500,7 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         name = m.get("first_name") or "Member"
         tg_user = f"(@{m['tg_username']})" if m.get("tg_username") else f"(ID: {m['user_id']})"
         lines.append(
-            f"{i}. <code>@{html.escape(m['x_handle'])}</code> ➔ <a href=\"tg://user?id={m['user_id']}\">{html.escape(name)}</a> {html.escape(tg_user)}"
+            f"{i}. <code>{html.escape(m['x_handle'])}</code> ➔ <a href=\"tg://user?id={m['user_id']}\">{html.escape(name)}</a> {html.escape(tg_user)}"
         )
 
     # Telegram message length limit is 4096 characters, chunk if necessary
