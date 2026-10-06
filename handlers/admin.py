@@ -105,9 +105,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• <b>Option C:</b> Link by their numeric Telegram User ID:\n"
         "  <code>/link &lt;user_id&gt; &lt;x_handle&gt;</code>\n\n"
         "<b>3. Managing Links:</b>\n"
-        "• <code>/unlink &lt;x_handle | @tg_username | user_id&gt;</code>\n"
-        "• <code>/lookup &lt;x_handle | @tg_username | user_id&gt;</code>\n"
-        "• <code>/list</code>"
+        "• <code>/synctags</code> — Auto-sync all manually assigned admin titles into the bot\n"
+        "• <code>/unlink &lt;tag | @tg_username | user_id&gt;</code> — Remove an existing tag\n"
+        "• <code>/lookup &lt;tag | @tg_username | user_id&gt;</code> — View member details\n"
+        "• <code>/list</code> — List all registered members and tags\n"
+        "• <code>/demote [@user]</code> — Demote a user back to normal member"
     )
     await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
 
@@ -373,18 +375,38 @@ async def tag_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     x_handle = args[0]
     custom_message = " ".join(args[1:]).strip() if len(args) > 1 else ""
 
-    await execute_tag(update, x_handle, custom_message)
+    await execute_tag(update, context, x_handle, custom_message)
 
 
-async def execute_tag(update: Update, x_handle: str, custom_message: str = ""):
+async def execute_tag(update: Update, context: ContextTypes.DEFAULT_TYPE, x_handle: str, custom_message: str = ""):
     """Helper to perform the tag lookup and generate the notification mention."""
     clean_x = database.normalize_handle(x_handle)
     member = database.get_member_by_x_handle(clean_x)
 
+    # If not found in database, check if any group administrator has this tag as their custom_title
+    if not member and update.effective_chat and update.effective_chat.type != ChatType.PRIVATE:
+        try:
+            admins = await context.bot.get_chat_administrators(update.effective_chat.id)
+            for adm in admins:
+                adm_title = (getattr(adm, "custom_title", None) or "").strip()
+                if adm_title and database.normalize_handle(adm_title) == clean_x:
+                    u = adm.user
+                    database.upsert_member(
+                        user_id=u.id,
+                        x_handle=clean_x,
+                        tg_username=u.username,
+                        first_name=u.first_name,
+                        last_name=u.last_name
+                    )
+                    member = database.get_member_by_x_handle(clean_x)
+                    break
+        except Exception as e:
+            logger.debug("Error checking administrators for custom_title: %s", e)
+
     if not member:
         await update.message.reply_text(
             f"❌ <b>No member found</b> registered with tag <code>{html.escape(clean_x)}</code>.\n"
-            f"Link them first using <code>/link &lt;user&gt; {html.escape(clean_x)}</code>.",
+            f"Link them using <code>/link &lt;user&gt; {html.escape(clean_x)}</code> or run <code>/synctags</code>.",
             parse_mode=ParseMode.HTML
         )
         return
@@ -409,6 +431,67 @@ async def execute_tag(update: Update, x_handle: str, custom_message: str = ""):
     await update.message.reply_text(response_text, parse_mode=ParseMode.HTML)
 
 
+async def synctags_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Scans all group administrators and automatically imports their Custom Titles as tags.
+    """
+    if not await admin_guard(update, context):
+        return
+
+    chat = update.effective_chat
+    if not chat or chat.type == ChatType.PRIVATE:
+        await update.message.reply_text(
+            "⚠️ <code>/synctags</code> must be run inside your Telegram group.",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    try:
+        admins = await context.bot.get_chat_administrators(chat.id)
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ Failed to inspect group administrators: {html.escape(str(e))}",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    synced = []
+    for adm in admins:
+        if adm.user.is_bot:
+            continue
+        title = (getattr(adm, "custom_title", None) or "").strip()
+        if title:
+            clean_tag = database.normalize_handle(title)
+            database.upsert_member(
+                user_id=adm.user.id,
+                x_handle=clean_tag,
+                tg_username=adm.user.username,
+                first_name=adm.user.first_name,
+                last_name=adm.user.last_name
+            )
+            name = adm.user.first_name or "Member"
+            tg_user = f"(@{adm.user.username})" if adm.user.username else f"(ID: {adm.user.id})"
+            synced.append(
+                f"• <code>{html.escape(clean_tag)}</code> ➔ <a href=\"tg://user?id={adm.user.id}\">{html.escape(name)}</a> {html.escape(tg_user)}"
+            )
+
+    if not synced:
+        await update.message.reply_text(
+            "ℹ️ <b>No Custom Titles found.</b>\n\n"
+            "None of the administrators in this group currently have a Custom Title badge set in "
+            "<b>Group Settings ➔ Administrators</b>.",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    response = (
+        f"✅ <b>Successfully synced {len(synced)} tag(s) from group titles:</b>\n\n"
+        + "\n".join(synced)
+        + "\n\n<i>You can now mention any of them using <code>/tag &lt;tag&gt;</code>!</i>"
+    )
+    await update.message.reply_text(response, parse_mode=ParseMode.HTML)
+
+
 async def handle_text_shortcuts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Supports shortcut triggers like `#tag <x_handle> [msg]` or `!tag <x_handle> [msg]`
@@ -426,7 +509,7 @@ async def handle_text_shortcuts(update: Update, context: ContextTypes.DEFAULT_TY
         if len(parts) >= 2:
             x_handle = parts[1]
             custom_message = " ".join(parts[2:]).strip() if len(parts) > 2 else ""
-            await execute_tag(update, x_handle, custom_message)
+            await execute_tag(update, context, x_handle, custom_message)
 
 
 async def lookup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
