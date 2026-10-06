@@ -23,6 +23,7 @@ from handlers.admin import (
     start_command,
     help_command,
     link_command,
+    bulklink_command,
     unlink_command,
     demote_command,
     synctags_command,
@@ -106,6 +107,7 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("link", link_command))
     app.add_handler(CommandHandler("assign", link_command))  # Alias for link
+    app.add_handler(CommandHandler("bulklink", bulklink_command))
     app.add_handler(CommandHandler("unlink", unlink_command))
     app.add_handler(CommandHandler("demote", demote_command))
     app.add_handler(CommandHandler("synctags", synctags_command))

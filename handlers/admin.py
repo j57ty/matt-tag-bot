@@ -233,21 +233,22 @@ async def link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Save to database
     record = database.upsert_member(
-        user_id=target_user_id,
         x_handle=clean_x,
         tg_username=target_username,
+        user_id=target_user_id,
         first_name=target_first_name,
         last_name=target_last_name
     )
 
-    display_name = record.get("first_name") or "Member"
+    display_name = record.get("first_name") or (f"@{record['tg_username']}" if record.get("tg_username") else "Member")
     tg_user_text = f"@{record['tg_username']}" if record.get("tg_username") else f"ID: {target_user_id}"
 
+    user_link = f"<a href=\"tg://user?id={target_user_id}\">{html.escape(display_name)}</a>" if target_user_id else html.escape(display_name)
     response_text = (
         "✅ <b>Member Successfully Linked!</b>\n\n"
         f"• <b>Tag:</b> <code>{html.escape(clean_x)}</code>\n"
-        f"• <b>Telegram Account:</b> <a href=\"tg://user?id={target_user_id}\">{html.escape(display_name)}</a> ({html.escape(tg_user_text)})\n"
-        f"• <b>Telegram ID:</b> <code>{target_user_id}</code>\n\n"
+        f"• <b>Telegram Account:</b> {user_link} ({html.escape(tg_user_text)})\n"
+        f"• <b>Telegram ID:</b> <code>{target_user_id or 'Auto-caches when user speaks'}</code>\n\n"
         f"<i>You can now mention/find them anytime using:</i> <code>/tag {html.escape(clean_x)}</code>"
     )
     await message.reply_text(response_text, parse_mode=ParseMode.HTML)
@@ -411,17 +412,23 @@ async def execute_tag(update: Update, context: ContextTypes.DEFAULT_TYPE, x_hand
         )
         return
 
-    user_id = member["user_id"]
+    user_id = member.get("user_id")
     tg_username = member.get("tg_username")
     first_name = member.get("first_name") or "Member"
 
-    # Direct Telegram mention link that guarantees notification
-    mention_link = f"<a href=\"tg://user?id={user_id}\">{html.escape(first_name)}</a>"
-    username_display = f"(@{html.escape(tg_username)})" if tg_username else ""
+    if user_id:
+        mention_link = f"<a href=\"tg://user?id={user_id}\">{html.escape(first_name)}</a>"
+        username_display = f"(@{html.escape(tg_username)})" if tg_username else ""
+    elif tg_username:
+        mention_link = f"@{html.escape(tg_username)}"
+        username_display = ""
+    else:
+        mention_link = "Member"
+        username_display = ""
 
     lines = [
         f"🎯 <b>Tag:</b> <code>{html.escape(clean_x)}</code>",
-        f"👤 <b>Member:</b> {mention_link} {username_display}"
+        f"👤 <b>Member:</b> {mention_link} {username_display}".strip()
     ]
 
     if custom_message:
@@ -575,10 +582,19 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines = [f"📋 <b>Registered Members ({len(members)} total):</b>\n"]
     for i, m in enumerate(members, start=1):
-        name = m.get("first_name") or "Member"
-        tg_user = f"(@{m['tg_username']})" if m.get("tg_username") else f"(ID: {m['user_id']})"
+        uid = m.get("user_id")
+        name = m.get("first_name")
+        tg_user = m.get("tg_username")
+        if uid and name:
+            display = f"<a href=\"tg://user?id={uid}\">{html.escape(name)}</a>" + (f" (@{html.escape(tg_user)})" if tg_user else "")
+        elif tg_user:
+            display = f"@{html.escape(tg_user)}"
+        elif uid:
+            display = f"ID: <code>{uid}</code>"
+        else:
+            display = "Member"
         lines.append(
-            f"{i}. <code>{html.escape(m['x_handle'])}</code> ➔ <a href=\"tg://user?id={m['user_id']}\">{html.escape(name)}</a> {html.escape(tg_user)}"
+            f"{i}. <code>{html.escape(m['x_handle'])}</code> ➔ {display}"
         )
 
     # Telegram message length limit is 4096 characters, chunk if necessary
@@ -591,6 +607,45 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if chunk:
         await update.message.reply_text(chunk, parse_mode=ParseMode.HTML)
+
+
+async def bulklink_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Links multiple members in bulk from pasted text.
+    Usage:
+    /bulklink
+    @username tag
+    @username2 tag2
+    """
+    if not await admin_guard(update, context):
+        return
+
+    message = update.message
+    text = message.text or ""
+    lines = text.split("\n")[1:]
+    if not lines and context.args:
+        lines = [" ".join(context.args)]
+
+    count = 0
+    for line in lines:
+        parts = line.strip().split()
+        at_parts = [p.lstrip("@").strip() for p in parts if "@" in p]
+        if len(at_parts) >= 2:
+            clean_tg = database.normalize_handle(at_parts[0])
+            clean_tag = database.normalize_handle(at_parts[1])
+            database.upsert_member(x_handle=clean_tag, tg_username=clean_tg)
+            count += 1
+        elif len(parts) >= 2:
+            clean_tg = database.normalize_handle(parts[0])
+            clean_tag = database.normalize_handle(parts[1])
+            database.upsert_member(x_handle=clean_tag, tg_username=clean_tg)
+            count += 1
+
+    await message.reply_text(
+        f"✅ Successfully linked <b>{count}</b> member(s) in bulk!\n"
+        f"View all members with <code>/list</code>.",
+        parse_mode=ParseMode.HTML
+    )
 
 
 async def myinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
